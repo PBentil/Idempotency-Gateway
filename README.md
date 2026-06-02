@@ -1,133 +1,98 @@
-# Idempotency-Gateway (The "Pay-Once" Protocol)
-This challenge is designed to test your ability to bridge Computer Science fundamentals with Modern Backend Engineering.
+<p align="center">
+  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
+</p>
 
-## 1. Business Context
-> **Client:** *FinSafe Transactions Ltd.* (A fast-growing Payment Processor).
+[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
+[circleci-url]: https://circleci.com/gh/nestjs/nest
 
-### The Problem
-FinSafe's clients (e-commerce shops) occasionally experience network timeouts. When this happens, their servers automatically retry sending payment requests. Recently, this has led to a critical issue: **Double Charging**.
+  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
+    <p align="center">
+<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
+<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
+<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
+<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
+<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
+<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
+<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
+  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
+    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
+  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
+</p>
+  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
+  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
 
-If a customer clicks "Pay," the request is sent, but the network lags. The client retries the request. FinSafe processes *both* requests, charging the customer twice. This is causing customer churn and regulatory headaches.
+## Description
 
-### The Solution
-FinSafe needs you to build an **Idempotency Layer**. This is a middleware service (or API) that ensures no matter how many times a client sends the same request, the payment is processed **exactly once**.
+[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
 
----
+## Project setup
 
-## 2. Technical Objective
-Build a RESTful API that mimics a payment processing backend. It must check for a unique `Idempotency-Key` in the HTTP headers.
+```bash
+$ npm install
+```
 
-* **First Request:** Process the payment and save the response.
-* **Duplicate Request:** Detect the existing key and return the *saved* response immediately, without processing the payment again.
+## Compile and run the project
 
+```bash
+# development
+$ npm run start
 
----
+# watch mode
+$ npm run start:dev
 
-## 3. Getting Started
+# production mode
+$ npm run start:prod
+```
 
-1.  **Fork this Repository:** Do not clone it directly. Create a fork to your own GitHub account.
-2.  **Environment:** You may use **Node.js, Python, Java or Go, etc.**. You may use any database or in-memory store (Redis, SQLite, or a simple native Map/Dictionary variable).
-3.  **Submission:** Your final submission will be a link to your forked repository containing the source code and documentation.
+## Run tests
 
----
+```bash
+# unit tests
+$ npm run test
 
-## 4. The Architecture Diagram 
-**Task:** Before you write any code, you must design the logic flow.
-**Deliverable:** A **Sequence Diagram** or **Flowchart** included in your README.
+# e2e tests
+$ npm run test:e2e
 
----
+# test coverage
+$ npm run test:cov
+```
 
-## 5. User Stories & Acceptance Criteria
+## Deployment
 
-### User Story 1: The First Transaction (Happy Path)
-**As a** client system (e.g., an online store),  
-**I want to** send a payment request with a unique ID,  
-**So that** my transaction is processed successfully.
+When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
 
-**Acceptance Criteria:**
-- [ ] The API accepts a `POST` request to endpoint `/process-payment`.
-- [ ] The request header must contain `Idempotency-Key: <some-unique-string>`.
-- [ ] The request body accepts a JSON object (e.g., `{"amount": 100, "currency": "GHS"}`).
-- [ ] The server simulates processing (e.g., a 2-second delay) and returns a `200 OK` or `201 Created` response.
-- [ ] The response body should include a status message: `"Charged 100 GHS"`.
+If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
 
-### User Story 2: The Duplicate Attempt (Idempotency Logic)
-**As a** client system,  
-**I want to** safely retry a request if I don't hear back,  
-**So that** I don't accidentally double-charge the user.
+```bash
+$ npm install -g @nestjs/mau
+$ mau deploy
+```
 
-**Acceptance Criteria:**
-- [ ] If the client sends a second `POST` request with the **same** `Idempotency-Key` and payload:
-    - [ ] The server must **NOT** run the processing logic again (no 2-second delay).
-    - [ ] The server must return the **exact same** response body and status code as the first successful request.
-    - [ ] The server returns a header `X-Cache-Hit: true` to indicate this was a replayed response.
+With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
 
-### User Story 3: Different Request, Same Key (Fraud/Error Check)
-**As a** security officer,  
-**I want to** reject requests that reuse keys for different payments,  
-**So that** we maintain data integrity.
+## Resources
 
-**Acceptance Criteria:**
-- [ ] If a request arrives with an existing `Idempotency-Key` but a **different** request body (e.g., changing amount from 100 to 500):
-    - [ ] The server must return a `422 Unprocessable Entity` or `409 Conflict` error.
-    - [ ] The error message should state: `"Idempotency key already used for a different request body."`
+Check out a few resources that may come in handy when working with NestJS:
 
----
+- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
+- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
+- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
+- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
+- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
+- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
+- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
+- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
 
-## 6. Bonus User Story (The "In-Flight" Check)
-**As a** system architect,  
-**I want to** handle cases where two identical requests arrive at the exact same time,  
-**So that** we don't succumb to race conditions.
+## Support
 
-**Scenario:** Request A arrives. While Request A is still "processing" (during the 2-second delay), Request B (same key) arrives.
+Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
 
-**Acceptance Criteria:**
-- [ ] Request B should not start a new process.
-- [ ] Request B should not return `409 Conflict`.
-- [ ] Request B should wait (block) until Request A finishes, and then return the result of Request A.
+## Stay in touch
 
----
+- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
+- Website - [https://nestjs.com](https://nestjs.com/)
+- Twitter - [@nestframework](https://twitter.com/nestframework)
 
-## 7. The "Developer's Choice" Challenge
-We believe great engineers are also product thinkers.
+## License
 
-**Task:** Identify **one** additional feature or safety mechanism that would make this system better for a real-world Fintech company.
-1.  **Implement it.**
-2.  **Document it:** Explain *why* you added it in your README.
-
----
-
-## 8. Documentation Requirements
-Your final `README.md` must replace these instructions. It must cover:
-
-1.  **Architecture Diagram**
-2.  **Setup Instructions**
-3.  **API Documentation** 
-4.  **Design Decisions** 
-5.  **The Developer's Choice:** Description of the extra feature you added.
-
----
-Submit your repo link via the [online](https://forms.office.com/e/rGKtfeZCsH) form.
-
----
-## 🛑 Pre-Submission Checklist
-**WARNING:** Before you submit your solution, you **MUST** pass every item on this list.
-If you miss any of these critical steps, your submission will be **automatically rejected** and you will **NOT** be invited to an interview.
-
-### 1. 📂 Repository & Code
-- [ ] **Public Access:** Is your GitHub repository set to **Public**? (We cannot review private repos).
-- [ ] **Clean Code:** Did you remove unnecessary files (like `node_modules`, `.env` with real keys, or `.DS_Store`)?
-- [ ] **Run Check:** if we clone your repo and run `npm start` (or equivalent), does the server start immediately without crashing?
-
-### 2. 📄 Documentation (Crucial)
-- [ ] **Architecture Diagram:** Did you include a visual Diagram (Flowchart or Sequence Diagram) in the README?
-- [ ] **README Swap:** Did you **DELETE** the original instructions (the problem brief) from this file and replace it with your own documentation?
-- [ ] **API Docs:** Is there a clear list of Endpoints and Example Requests in the README?
-
-
-### 3. 🧹 Git Hygiene
-- [ ] **Commit History:** Does your repo have multiple commits with meaningful messages? (A single "Initial Commit" is a red flag).
-
----
-**Ready?**
-If you checked all the boxes above, submit your repository link in the application form. Good luck! 🚀
+Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
