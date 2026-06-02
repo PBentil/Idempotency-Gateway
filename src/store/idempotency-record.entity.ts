@@ -26,5 +26,5 @@ export class IdempotencyRecord {
     createdAt: Date;
 
     @Column({ type: 'timestamptz' })
-    expiresAt: Date;
+    expiredAt: Date;
 }

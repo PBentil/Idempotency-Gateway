@@ -1,9 +1,9 @@
-import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
+import {MiddlewareConsumer, Module, NestModule, RequestMethod} from '@nestjs/common';
 import { PaymentModule } from './payment/payment.module';
 import {ConfigModule, ConfigService} from "@nestjs/config";
 import {TypeOrmModule} from "@nestjs/typeorm";
+import {StoreModule} from "./store/store.module";
+import {IdempotencyMiddleware} from "./middleware/idempotency.middleware";
 
 @Module({
   imports: [
@@ -24,9 +24,14 @@ import {TypeOrmModule} from "@nestjs/typeorm";
         }),
         inject: [ConfigService],
       }),
-      PaymentModule
+      PaymentModule,
+      StoreModule,
   ],
-  controllers: [AppController],
-  providers: [AppService],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+    configure(consumer: MiddlewareConsumer) {
+        consumer
+            .apply(IdempotencyMiddleware)
+            .forRoutes({ path : 'process-payment', method: RequestMethod.POST });
+    }
+}
