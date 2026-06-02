@@ -1,7 +1,13 @@
-import { Injectable, NestMiddleware, UnprocessableEntityException } from '@nestjs/common';
+import {
+    HttpException,
+    Injectable,
+    NestMiddleware,
+    UnprocessableEntityException,
+} from '@nestjs/common';
 import { NextFunction, Request, Response } from 'express';
 import {IdempotencyStore} from "../store/idempotency-store";
 import {idempotencyStatus} from "../store/idempotency-status.enum";
+
 
 @Injectable()
 export class IdempotencyMiddleware implements NestMiddleware {
@@ -9,7 +15,6 @@ export class IdempotencyMiddleware implements NestMiddleware {
     constructor(private readonly store: IdempotencyStore) {}
 
     async use(req: Request, res: Response, next: NextFunction) {
-
         const idempotencyKey = req.headers['idempotency-key'] as string;
 
         if (!idempotencyKey) {
@@ -19,9 +24,20 @@ export class IdempotencyMiddleware implements NestMiddleware {
         }
 
         const incomingHash = this.store.hashBody(req.body);
+
         const existing = await this.store.findByKey(idempotencyKey);
 
         if (existing) {
+            if (existing.bodyHash !== incomingHash) {
+                throw new HttpException(
+                    {
+                        statusCode: 422,
+                        message: 'Idempotency key already used for a different request body.',
+                    },
+                    422,
+                );
+            }
+
             if (existing.status === idempotencyStatus.COMPLETED) {
                 res.setHeader('X-Cache-Hit', 'true');
                 return res.status(existing.statusCode).json(existing.responseBody);
