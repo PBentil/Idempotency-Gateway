@@ -1,10 +1,5 @@
-import {
-    HttpException,
-    Injectable,
-    NestMiddleware,
-    UnprocessableEntityException,
-} from '@nestjs/common';
-import { NextFunction, Request, Response } from 'express';
+import {HttpException, Injectable, NestMiddleware, UnprocessableEntityException,} from '@nestjs/common';
+import {NextFunction, Request, Response} from 'express';
 import {IdempotencyStore} from "../store/idempotency-store";
 import {idempotencyStatus} from "../store/idempotency-status.enum";
 
@@ -38,11 +33,28 @@ export class IdempotencyMiddleware implements NestMiddleware {
                 );
             }
 
+            if(existing.status === idempotencyStatus.PENDING){
+                const completed = await this.store.waitForCompletion(idempotencyKey);
+
+                if (!completed) {
+                    throw new HttpException(
+                        {
+                            statusCode: 503,
+                            message: 'Original request is still processing. Please retry shortly.',
+                        },
+                        503,
+                    );
+                }
+                res.setHeader('X-Cache-Hit', 'true');
+                return res.status(completed.statusCode).json(completed.responseBody);
+            }
+
             if (existing.status === idempotencyStatus.COMPLETED) {
                 res.setHeader('X-Cache-Hit', 'true');
                 return res.status(existing.statusCode).json(existing.responseBody);
             }
         }
+
 
         await this.store.setPending(idempotencyKey, incomingHash);
 
