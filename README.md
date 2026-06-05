@@ -1,98 +1,257 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Idempotency Gateway — The "Pay-Once" Protocol
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+> A payment processing API that guarantees every transaction is executed **exactly once**, no matter how many times the request is retried.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+Built with **NestJS** + **TypeScript** + **SQLite** (via TypeORM).  
+No database setup required — clone, install, and run.
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## The Problem This Solves
 
-## Project setup
+FinSafe's e-commerce clients occasionally experience network timeouts. When this happens, their servers automatically retry payment requests — causing customers to be **charged twice**.
 
-```bash
-$ npm install
+This API solves that by assigning every payment request a unique `Idempotency-Key`. No matter how many times the same request is retried, the payment is processed **exactly once**.
+
+---
+
+## Architecture Diagram
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client
+    participant Middleware as IdempotencyMiddleware
+    participant DB as SQLite (TypeORM)
+    participant Service as PaymentService
+
+    Client->>Middleware: POST /process-payment<br/>Idempotency-Key: abc-123
+
+    Middleware->>DB: findByKey("abc-123")
+
+    alt New Key — First Request
+        DB-->>Middleware: null
+        Middleware->>DB: setPending("abc-123", bodyHash)
+        Middleware->>Service: processPayment(body)
+        Note over Service: 2-second simulated delay
+        Service-->>Middleware: { message: "Charged 100 GHS", ... }
+        Middleware->>DB: setComplete("abc-123", 201, response)
+        Middleware-->>Client: 201 Created
+
+    else Same Key + Same Body + COMPLETE — Duplicate Request
+        DB-->>Middleware: { status: "complete", response: ... }
+        Middleware-->>Client: 201 Created — X-Cache-Hit: true
+
+    else Same Key + Different Body — Fraud Check
+        DB-->>Middleware: { bodyHash: "xyz..." }
+        Middleware-->>Client: 422 Unprocessable Entity
+
+    else Same Key + Same Body + PENDING — Race Condition
+        DB-->>Middleware: { status: "pending" }
+        Note over Middleware: Poll DB every 100ms until complete
+        Middleware->>DB: waitForCompletion("abc-123")
+        DB-->>Middleware: { status: "complete", response: ... }
+        Middleware-->>Client: 201 Created — X-Cache-Hit: true
+    end
 ```
 
-## Compile and run the project
+---
+
+## Setup Instructions
+
+### Prerequisites
+- Node.js v18 or higher
+- npm v9 or higher
+
+No database installation required — SQLite is bundled automatically.
+
+### Installation & Running
 
 ```bash
-# development
-$ npm run start
+# 1. Clone the repository
+git clone https://github.com/<your-username>/Idempotency-Gateway.git
+cd Idempotency-Gateway
 
-# watch mode
-$ npm run start:dev
+# 2. Install dependencies
+npm install
 
-# production mode
-$ npm run start:prod
+# 3. Start the server
+npm start
 ```
 
-## Run tests
+Server runs on **http://localhost:3000**
+
+A `database.sqlite` file is created automatically in the project root on first run.
+
+For development with hot reload:
+```bash
+npm run start:dev
+```
+
+---
+
+## Project Structure
+
+```
+src/
+├── main.ts                           ← Entry point
+├── app.module.ts                     ← Root module, registers middleware
+├── middleware/
+│   └── idempotency.middleware.ts     ← Core idempotency logic
+├── store/
+│   ├── idempotency-record.entity.ts  ← SQLite table definition
+│   ├── idempotency-status.enum.ts    ← PENDING | COMPLETE enum
+│   ├── idempotency.store.ts          ← Database operations
+│   └── store.module.ts               ← Store module
+└── payment/
+    ├── payment.controller.ts         ← POST /process-payment
+    ├── payment.service.ts            ← Payment business logic
+    ├── payment.dto.ts                ← Request/response shape
+    └── payment.module.ts             ← Payment module
+```
+
+---
+
+## API Documentation
+
+### `POST /process-payment`
+
+Processes a payment exactly once for a given idempotency key.
+
+#### Request Headers
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `Content-Type` | ✅ | `application/json` |
+| `Idempotency-Key` | ✅ | Unique string per transaction (UUID recommended) |
+
+#### Request Body
+
+```json
+{
+  "amount": 100,
+  "currency": "GHS"
+}
+```
+
+---
+
+### Response Scenarios
+
+#### ✅ 201 — First Request (New Transaction)
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+curl -X POST http://localhost:3000/process-payment \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: a1b2c3d4-e5f6-7890-abcd-ef1234567890" \
+  -d '{"amount": 100, "currency": "GHS"}'
 ```
 
-## Deployment
+```json
+{
+  "message": "Charged 100 GHS",
+  "transactionId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "amount": 100,
+  "currency": "GHS",
+  "processedAt": "2026-06-05T17:00:00.000Z"
+}
+```
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+---
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+#### ♻️ 201 — Duplicate Request (Instant Replay)
+
+Same key, same body — returns immediately with no 2-second delay.
+
+Response headers include `X-Cache-Hit: true`.
+
+```json
+{
+  "message": "Charged 100 GHS",
+  "transactionId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "amount": 100,
+  "currency": "GHS",
+  "processedAt": "2026-06-05T17:00:00.000Z"
+}
+```
+
+Note: `transactionId` and `processedAt` are identical to the first response — this confirms the payment was not processed again.
+
+---
+
+#### ❌ 422 — Same Key, Different Body (Fraud/Error Check)
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+curl -X POST http://localhost:3000/process-payment \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: a1b2c3d4-e5f6-7890-abcd-ef1234567890" \
+  -d '{"amount": 500, "currency": "GHS"}'
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+```json
+{
+  "statusCode": 422,
+  "message": "Idempotency key already used for a different request body."
+}
+```
 
-## Resources
+---
 
-Check out a few resources that may come in handy when working with NestJS:
+#### ❌ 422 — Missing Idempotency-Key Header
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+```bash
+curl -X POST http://localhost:3000/process-payment \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 100, "currency": "GHS"}'
+```
 
-## Support
+```json
+{
+  "statusCode": 422,
+  "message": "Missing required header: Idempotency-Key"
+}
+```
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+---
 
-## Stay in touch
+## Design Decisions
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+### 1. NestJS Middleware for Idempotency Logic
+The idempotency check lives entirely in `IdempotencyMiddleware`. The `PaymentController` and `PaymentService` have zero awareness of idempotency — they just process payments. This separation means payment logic stays clean and independently testable, while the middleware handles the protocol layer.
 
-## License
+### 2. SQLite for Zero-Config Setup
+SQLite requires no installation or configuration. Anyone who clones this repo can run `npm install && npm start` and the server starts immediately — the database file is created automatically. The `IdempotencyStore` is fully abstracted behind a NestJS injectable service, so swapping to PostgreSQL or Redis in production requires changing only the TypeORM config in `app.module.ts`.
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+### 3. SHA-256 Body Hashing for Payload Comparison
+Rather than storing the full request body, a SHA-256 fingerprint is stored. This is constant in memory size regardless of payload size and collision-resistant enough for this use case. If the same key arrives with a different body, the hashes won't match and the request is rejected immediately.
+
+### 4. PENDING State for Race Condition Handling
+When a new key arrives, it is marked `PENDING` in the database before processing begins. If a duplicate arrives during the 2-second processing window, the middleware detects `PENDING` and polls every 100ms until the original completes, then replays the result. This prevents both double-processing and incorrect error responses under concurrency.
+
+### 5. Response Interception via `res.json` Override
+To capture the outgoing response for caching without modifying the controller, the middleware overrides `res.json()` before calling `next()`. The controller sends its response normally, unaware that the middleware is transparently capturing and persisting it to the database.
+
+---
+
+## Developer's Choice: 24-Hour TTL Key Expiry
+
+### What it is
+Every idempotency key expires **24 hours** after creation. After that window the key is treated as non-existent, and a new request with the same key is processed as a fresh transaction.
+
+### Why it matters for Fintech
+Without expiry, the `idempotency_records` table grows unboundedly — a storage leak in production. More importantly, it mirrors the real-world standard used by Stripe, Paystack, and most payment APIs. A 24-hour window gives clients a safe and predictable retry period while ensuring stale data does not persist indefinitely.
+
+### Implementation
+Every record stores an `expiresAt` timestamp (24 hours from creation). The `findByKey()` method checks this on every read — expired records are deleted immediately and the calling code receives `null`, treating the request as brand new.
+
+---
+
+## Pre-Submission Checklist
+
+- [x] Repository is public on GitHub
+- [x] `node_modules`, `.env`, and `database.sqlite` are in `.gitignore`
+- [x] `npm install && npm start` works immediately after cloning
+- [x] Architecture diagram included above
+- [x] Original README instructions replaced with this documentation
+- [x] API endpoints and example requests documented
+- [x] Multiple meaningful commits in git history
