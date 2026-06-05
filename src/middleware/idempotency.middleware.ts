@@ -1,7 +1,7 @@
 import {HttpException, Injectable, NestMiddleware, UnprocessableEntityException,} from '@nestjs/common';
 import {NextFunction, Request, Response} from 'express';
 import {IdempotencyStore} from "../store/idempotency-store";
-import {idempotencyStatus} from "../store/idempotency-status.enum";
+import {IdempotencyStatus} from "../store/idempotency-status.enum";
 
 
 @Injectable()
@@ -33,7 +33,7 @@ export class IdempotencyMiddleware implements NestMiddleware {
                 );
             }
 
-            if(existing.status === idempotencyStatus.PENDING){
+            if(existing.status === IdempotencyStatus.PENDING){
                 const completed = await this.store.waitForCompletion(idempotencyKey);
 
                 if (!completed) {
@@ -49,7 +49,7 @@ export class IdempotencyMiddleware implements NestMiddleware {
                 return res.status(completed.statusCode).json(completed.responseBody);
             }
 
-            if (existing.status === idempotencyStatus.COMPLETED) {
+            if (existing.status === IdempotencyStatus.COMPLETED) {
                 res.setHeader('X-Cache-Hit', 'true');
                 return res.status(existing.statusCode).json(existing.responseBody);
             }
@@ -60,7 +60,7 @@ export class IdempotencyMiddleware implements NestMiddleware {
 
         const originalJson = res.json.bind(res);
         res.json = (body: any) => {
-            this.store.setCompleted(idempotencyKey, res.statusCode, body);
+            this.store.setComplete(idempotencyKey, res.statusCode, body);
             return originalJson(body);
         };
 
