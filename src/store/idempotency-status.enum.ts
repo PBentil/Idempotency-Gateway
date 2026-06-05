@@ -1,4 +1,4 @@
-export enum idempotencyStatus {
+export enum IdempotencyStatus {
     PENDING = 'pending',
     COMPLETED = 'completed',
 }

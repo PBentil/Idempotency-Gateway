@@ -4,26 +4,19 @@ import {ConfigModule, ConfigService} from "@nestjs/config";
 import {TypeOrmModule} from "@nestjs/typeorm";
 import {StoreModule} from "./store/store.module";
 import {IdempotencyMiddleware} from "./middleware/idempotency.middleware";
+import {IdempotencyRecord} from "./store/idempotency-record.entity";
 
 @Module({
   imports: [
       ConfigModule.forRoot({
         isGlobal: true,
       }),
-      TypeOrmModule.forRootAsync({
-        imports: [ConfigModule],
-        useFactory: (configService: ConfigService) => ({
-          type: 'postgres',
-          host: configService.get<string>('DB_HOST'),
-          port: configService.get<number>('DB_PORT'),
-          username: configService.get<string>('DB_USERNAME'),
-          password: configService.get<string>('DB_PASSWORD'),
-          database: configService.get<string>('DB_NAME'),
-          entities: [__dirname + '/**/*.entity{.ts,.js}'],
+      TypeOrmModule.forRoot({
+          type: 'better-sqlite3',
+          database: 'database.sqlite3',
+          entities: [IdempotencyRecord],
           synchronize: true,
         }),
-        inject: [ConfigService],
-      }),
       PaymentModule,
       StoreModule,
   ],
