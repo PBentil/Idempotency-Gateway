@@ -69,7 +69,7 @@ No database installation required — SQLite is bundled automatically.
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/<your-username>/Idempotency-Gateway.git
+git clone https://github.com/PBentil/Idempotency-Gateway
 cd Idempotency-Gateway
 
 # 2. Install dependencies
@@ -217,10 +217,10 @@ curl -X POST http://localhost:3000/process-payment \
 ## Design Decisions
 
 ### 1. NestJS Middleware for Idempotency Logic
-The idempotency check lives entirely in `IdempotencyMiddleware`. The `PaymentController` and `PaymentService` have zero awareness of idempotency — they just process payments. This separation means payment logic stays clean and independently testable, while the middleware handles the protocol layer.
+The idempotency check lives entirely in `IdempotencyMiddleware`. The `PaymentController` and `PaymentService` have zero awareness of idempotency they just process payments. This separation means payment logic stays clean and independently testable, while the middleware handles the protocol layer.
 
 ### 2. SQLite for Zero-Config Setup
-SQLite requires no installation or configuration. Anyone who clones this repo can run `npm install && npm start` and the server starts immediately — the database file is created automatically. The `IdempotencyStore` is fully abstracted behind a NestJS injectable service, so swapping to PostgreSQL or Redis in production requires changing only the TypeORM config in `app.module.ts`.
+SQLite requires no installation or configuration. Anyone who clones this repo can run `npm install && npm start` and the server starts immediately the database file is created automatically. The `IdempotencyStore` is fully abstracted behind a NestJS injectable service, so swapping to PostgreSQL or Redis in production requires changing only the TypeORM config in `app.module.ts`.
 
 ### 3. SHA-256 Body Hashing for Payload Comparison
 Rather than storing the full request body, a SHA-256 fingerprint is stored. This is constant in memory size regardless of payload size and collision-resistant enough for this use case. If the same key arrives with a different body, the hashes won't match and the request is rejected immediately.
@@ -239,7 +239,7 @@ To capture the outgoing response for caching without modifying the controller, t
 Every idempotency key expires **24 hours** after creation. After that window the key is treated as non-existent, and a new request with the same key is processed as a fresh transaction.
 
 ### Why it matters for Fintech
-Without expiry, the `idempotency_records` table grows unboundedly — a storage leak in production. More importantly, it mirrors the real-world standard used by Stripe, Paystack, and most payment APIs. A 24-hour window gives clients a safe and predictable retry period while ensuring stale data does not persist indefinitely.
+Without expiry, the `idempotency_records` table grows unboundedly a storage leak in production. More importantly, it mirrors the real-world standard used by Stripe, Paystack, and most payment APIs. A 24-hour window gives clients a safe and predictable retry period while ensuring stale data does not persist indefinitely.
 
 ### Implementation
 Every record stores an `expiresAt` timestamp (24 hours from creation). The `findByKey()` method checks this on every read — expired records are deleted immediately and the calling code receives `null`, treating the request as brand new.

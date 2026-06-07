@@ -1,6 +1,6 @@
 import {MiddlewareConsumer, Module, NestModule, RequestMethod} from '@nestjs/common';
 import { PaymentModule } from './payment/payment.module';
-import {ConfigModule, ConfigService} from "@nestjs/config";
+import {ConfigModule} from "@nestjs/config";
 import {TypeOrmModule} from "@nestjs/typeorm";
 import {StoreModule} from "./store/store.module";
 import {IdempotencyMiddleware} from "./middleware/idempotency.middleware";
