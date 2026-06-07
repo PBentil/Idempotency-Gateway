@@ -22,6 +22,7 @@ sequenceDiagram
     autonumber
     participant Client
     participant Middleware as IdempotencyMiddleware
+    participant Cache as Response Cache (Memory)
     participant DB as SQLite (TypeORM)
     participant Service as PaymentService
 
@@ -34,24 +35,35 @@ sequenceDiagram
         Middleware->>DB: setPending("abc-123", bodyHash)
         Middleware->>Service: processPayment(body)
         Note over Service: 2-second simulated delay
-        Service-->>Middleware: { message: "Charged 100 GHS", ... }
-        Middleware->>DB: setComplete("abc-123", 201, response)
+        Service-->>Middleware: response body
+        Middleware->>DB: setComplete("abc-123", 201, fields)
+        Middleware->>Cache: store response
         Middleware-->>Client: 201 Created
 
     else Same Key + Same Body + COMPLETE — Duplicate Request
-        DB-->>Middleware: { status: "complete", response: ... }
-        Middleware-->>Client: 201 Created — X-Cache-Hit: true
+        DB-->>Middleware: status complete
+        Middleware->>Cache: getCachedResponse("abc-123")
+        alt Cache HIT
+            Cache-->>Middleware: response
+            Middleware-->>Client: 201 — X-Cache-Hit: true, X-Cache-Source: memory
+        else Cache MISS (server restarted)
+            Cache-->>Middleware: null
+            Middleware->>DB: rebuildResponse from fields
+            Middleware->>Cache: repopulate cache
+            Middleware-->>Client: 201 — X-Cache-Hit: true, X-Cache-Source: database
+        end
 
     else Same Key + Different Body — Fraud Check
-        DB-->>Middleware: { bodyHash: "xyz..." }
+        DB-->>Middleware: bodyHash mismatch
         Middleware-->>Client: 422 Unprocessable Entity
 
     else Same Key + Same Body + PENDING — Race Condition
-        DB-->>Middleware: { status: "pending" }
+        DB-->>Middleware: status pending
         Note over Middleware: Poll DB every 100ms until complete
         Middleware->>DB: waitForCompletion("abc-123")
-        DB-->>Middleware: { status: "complete", response: ... }
-        Middleware-->>Client: 201 Created — X-Cache-Hit: true
+        DB-->>Middleware: status complete
+        Middleware->>Cache: getCachedResponse
+        Middleware-->>Client: 201 — X-Cache-Hit: true
     end
 ```
 
@@ -81,7 +93,7 @@ npm start
 
 Server runs on **http://localhost:3000**
 
-A `database.sqlite` file is created automatically in the project root on first run.
+A `database.sqlite3` file is created automatically in the project root on first run.
 
 For development with hot reload:
 ```bash
@@ -94,19 +106,19 @@ npm run start:dev
 
 ```
 src/
-├── main.ts                           ← Entry point
+├── main.ts                           ← Entry point, registers validation pipe
 ├── app.module.ts                     ← Root module, registers middleware
 ├── middleware/
 │   └── idempotency.middleware.ts     ← Core idempotency logic
 ├── store/
 │   ├── idempotency-record.entity.ts  ← SQLite table definition
 │   ├── idempotency-status.enum.ts    ← PENDING | COMPLETE enum
-│   ├── idempotency.store.ts          ← Database operations
+│   ├── idempotency.store.ts          ← Database + cache operations
 │   └── store.module.ts               ← Store module
 └── payment/
     ├── payment.controller.ts         ← POST /process-payment
     ├── payment.service.ts            ← Payment business logic
-    ├── payment.dto.ts                ← Request/response shape
+    ├── payment.dto.ts                ← Request validation rules
     └── payment.module.ts             ← Payment module
 ```
 
@@ -127,12 +139,24 @@ Processes a payment exactly once for a given idempotency key.
 
 #### Request Body
 
+| Field | Type | Rules |
+|-------|------|-------|
+| `amount` | number | Positive, max 2 decimal places, max 1,000,000 |
+| `currency` | string | One of: `GHS`, `USD`, `EUR`, `GBP`, `NGN` |
+
 ```json
 {
   "amount": 100,
   "currency": "GHS"
 }
 ```
+
+#### Response Headers
+
+| Header | Description |
+|--------|-------------|
+| `X-Cache-Hit` | `true` when response is a replay |
+| `X-Cache-Source` | `memory` (in-memory cache) or `database` (rebuilt from DB) |
 
 ---
 
@@ -153,7 +177,7 @@ curl -X POST http://localhost:3000/process-payment \
   "transactionId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
   "amount": 100,
   "currency": "GHS",
-  "processedAt": "2026-06-05T17:00:00.000Z"
+  "processedAt": "2026-06-07T17:00:00.000Z"
 }
 ```
 
@@ -163,7 +187,11 @@ curl -X POST http://localhost:3000/process-payment \
 
 Same key, same body — returns immediately with no 2-second delay.
 
-Response headers include `X-Cache-Hit: true`.
+```json
+HTTP/1.1 201 Created
+X-Cache-Hit: true
+X-Cache-Source: memory
+```
 
 ```json
 {
@@ -171,11 +199,23 @@ Response headers include `X-Cache-Hit: true`.
   "transactionId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
   "amount": 100,
   "currency": "GHS",
-  "processedAt": "2026-06-05T17:00:00.000Z"
+  "processedAt": "2026-06-07T17:00:00.000Z"
 }
 ```
 
-Note: `transactionId` and `processedAt` are identical to the first response — this confirms the payment was not processed again.
+`transactionId` and `processedAt` are identical to the first response — confirming the payment was not processed again.
+
+---
+
+#### ♻️ 201 — Duplicate After Server Restart (DB Rebuild)
+
+Cache is cold after restart — response is rebuilt from stored fields and cache is repopulated.
+
+```json
+HTTP/1.1 201 Created
+X-Cache-Hit: true
+X-Cache-Source: database
+```
 
 ---
 
@@ -199,12 +239,6 @@ curl -X POST http://localhost:3000/process-payment \
 
 #### ❌ 422 — Missing Idempotency-Key Header
 
-```bash
-curl -X POST http://localhost:3000/process-payment \
-  -H "Content-Type: application/json" \
-  -d '{"amount": 100, "currency": "GHS"}'
-```
-
 ```json
 {
   "statusCode": 422,
@@ -214,42 +248,98 @@ curl -X POST http://localhost:3000/process-payment \
 
 ---
 
+#### ❌ 400 — Invalid Request Body
+
+```json
+{
+  "message": ["Amount must be a number"],
+  "error": "Bad Request",
+  "statusCode": 400
+}
+```
+
+Common validation errors:
+- `Amount must be a number`
+- `Amount must be a positive number`
+- `Amount cannot have more than 2 decimal places`
+- `Amount cannot exceed 1,000,000`
+- `Currency must be one of: GHS, USD, EUR, GBP, NGN`
+
+---
+
+#### ❌ 503 — In-Flight Request Timed Out
+
+```json
+{
+  "statusCode": 503,
+  "message": "Original request is still processing. Please retry shortly."
+}
+```
+
+---
+
 ## Design Decisions
 
 ### 1. NestJS Middleware for Idempotency Logic
-The idempotency check lives entirely in `IdempotencyMiddleware`. The `PaymentController` and `PaymentService` have zero awareness of idempotency they just process payments. This separation means payment logic stays clean and independently testable, while the middleware handles the protocol layer.
+The idempotency check lives entirely in `IdempotencyMiddleware`. The `PaymentController` and `PaymentService` have zero awareness of idempotency — they just process payments. This separation means payment logic stays clean and independently testable, while the middleware handles the protocol layer.
 
 ### 2. SQLite for Zero-Config Setup
-SQLite requires no installation or configuration. Anyone who clones this repo can run `npm install && npm start` and the server starts immediately the database file is created automatically. The `IdempotencyStore` is fully abstracted behind a NestJS injectable service, so swapping to PostgreSQL or Redis in production requires changing only the TypeORM config in `app.module.ts`.
+SQLite requires no installation or configuration. Anyone who clones this repo can run `npm install && npm start` and the server starts immediately — the database file is created automatically. The `IdempotencyStore` is fully abstracted behind a NestJS injectable service, so swapping to PostgreSQL or Redis in production requires changing only the TypeORM config in `app.module.ts`.
 
 ### 3. SHA-256 Body Hashing for Payload Comparison
-Rather than storing the full request body, a SHA-256 fingerprint is stored. This is constant in memory size regardless of payload size and collision-resistant enough for this use case. If the same key arrives with a different body, the hashes won't match and the request is rejected immediately.
+Rather than storing the full request body, a SHA-256 fingerprint is stored. This is constant in size regardless of payload size and collision-resistant enough for this use case. If the same key arrives with a different body, the hashes won't match and the request is rejected immediately.
 
 ### 4. PENDING State for Race Condition Handling
 When a new key arrives, it is marked `PENDING` in the database before processing begins. If a duplicate arrives during the 2-second processing window, the middleware detects `PENDING` and polls every 100ms until the original completes, then replays the result. This prevents both double-processing and incorrect error responses under concurrency.
 
 ### 5. Response Interception via `res.json` Override
-To capture the outgoing response for caching without modifying the controller, the middleware overrides `res.json()` before calling `next()`. The controller sends its response normally, unaware that the middleware is transparently capturing and persisting it to the database.
+To capture the outgoing response for caching without modifying the controller, the middleware overrides `res.json()` before calling `next()`. The controller sends its response normally, unaware that the middleware is transparently capturing and persisting the response fields to the database.
+
+### 6. Strict Input Validation via Class-Validator
+All incoming request bodies are validated using `class-validator` decorators on the DTO with a global `ValidationPipe`. This rejects invalid amounts (strings, negatives, decimals beyond 2 places, amounts over 1,000,000) and unsupported currencies before any business logic runs.
+
+### 7. Stuck PENDING Cleanup
+If the server crashes during the 2-second processing window, a key could remain `PENDING` forever — causing all future retries to wait 10 seconds and then receive a 503. To handle this, `findByKey()` checks if a record has been `PENDING` for more than 30 seconds and treats it as non-existent, allowing the request to be retried cleanly.
 
 ---
 
-## Developer's Choice: 24-Hour TTL Key Expiry
+## Developer's Choice Features
 
-### What it is
+### 1. Two-Layer Response Caching
+
+#### What it is
+Completed responses are stored in two places simultaneously — an in-memory `Map` (fast) and the SQLite database (persistent). On duplicate requests, the cache is checked first. If found, the response is served in under 5ms with zero database I/O. If the cache is cold (e.g. after a server restart), the response is rebuilt from the stored fields in SQLite and the cache is repopulated for subsequent requests.
+
+#### Why it matters for Fintech
+Payment systems can experience high volumes of retries during network instability. Serving duplicate responses from memory rather than disk significantly reduces database load and response latency. The database acts as the source of truth for persistence while the cache handles performance.
+
+#### How it works
+```
+Duplicate request → check memory cache
+    HIT  → return instantly (< 5ms) — X-Cache-Source: memory
+    MISS → read fields from SQLite → rebuild response → repopulate cache
+                                                      → X-Cache-Source: database
+```
+
+The database stores individual fields (`transactionId`, `amount`, `currency`, `processedAt`) rather than a full JSON blob. This keeps the schema clean and allows the response to be reconstructed deterministically without storing redundant data.
+
+### 2. 24-Hour TTL Key Expiry
+
+#### What it is
 Every idempotency key expires **24 hours** after creation. After that window the key is treated as non-existent, and a new request with the same key is processed as a fresh transaction.
 
-### Why it matters for Fintech
-Without expiry, the `idempotency_records` table grows unboundedly a storage leak in production. More importantly, it mirrors the real-world standard used by Stripe, Paystack, and most payment APIs. A 24-hour window gives clients a safe and predictable retry period while ensuring stale data does not persist indefinitely.
+#### Why it matters
+Without expiry, the `idempotency_records` table grows unboundedly — a storage leak in production. It mirrors the real-world standard used by Stripe, Paystack, and most payment APIs. A 24-hour window gives clients a safe and predictable retry period while ensuring stale data does not persist indefinitely.
 
-### Implementation
-Every record stores an `expiresAt` timestamp (24 hours from creation). The `findByKey()` method checks this on every read — expired records are deleted immediately and the calling code receives `null`, treating the request as brand new.
+#### Implementation
+Every record stores an `expiresAt` timestamp (24 hours from creation). The `findByKey()` method checks this on every read — expired records are deleted immediately and treated as non-existent. The cache entry is also cleared on expiry. No background cleanup job is needed.
 
 ---
 
 ## Pre-Submission Checklist
 
 - [x] Repository is public on GitHub
-- [x] `node_modules`, `.env`, and `database.sqlite` are in `.gitignore`
+- [x] `node_modules`, `.env`, and `database.sqlite3` are in `.gitignore`
 - [x] `npm install && npm start` works immediately after cloning
 - [x] Architecture diagram included above
 - [x] Original README instructions replaced with this documentation
