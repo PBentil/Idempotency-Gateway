@@ -1,8 +1,12 @@
-import {HttpException, Injectable, NestMiddleware, UnprocessableEntityException,} from '@nestjs/common';
-import {NextFunction, Request, Response} from 'express';
+import {
+    HttpException,
+    Injectable,
+    NestMiddleware,
+    UnprocessableEntityException,
+} from '@nestjs/common';
+import { NextFunction, Request, Response } from 'express';
+import { IdempotencyStatus } from '../store/idempotency-status.enum';
 import {IdempotencyStore} from "../store/idempotency-store";
-import {IdempotencyStatus} from "../store/idempotency-status.enum";
-
 
 @Injectable()
 export class IdempotencyMiddleware implements NestMiddleware {
@@ -10,6 +14,7 @@ export class IdempotencyMiddleware implements NestMiddleware {
     constructor(private readonly store: IdempotencyStore) {}
 
     async use(req: Request, res: Response, next: NextFunction) {
+
         const idempotencyKey = req.headers['idempotency-key'] as string;
 
         if (!idempotencyKey) {
@@ -19,10 +24,11 @@ export class IdempotencyMiddleware implements NestMiddleware {
         }
 
         const incomingHash = this.store.hashBody(req.body);
-
         const existing = await this.store.findByKey(idempotencyKey);
 
         if (existing) {
+
+            // Different body → reject
             if (existing.bodyHash !== incomingHash) {
                 throw new HttpException(
                     {
@@ -33,7 +39,8 @@ export class IdempotencyMiddleware implements NestMiddleware {
                 );
             }
 
-            if(existing.status === IdempotencyStatus.PENDING){
+            // PENDING → wait for original to finish
+            if (existing.status === IdempotencyStatus.PENDING) {
                 const completed = await this.store.waitForCompletion(idempotencyKey);
 
                 if (!completed) {
@@ -45,16 +52,25 @@ export class IdempotencyMiddleware implements NestMiddleware {
                         503,
                     );
                 }
+
+                const cached = this.store.getCachedResponse(idempotencyKey);
+                const response = cached ?? this.store.rebuildResponse(completed);
+
                 res.setHeader('X-Cache-Hit', 'true');
-                return res.status(completed.statusCode).json(completed.responseBody);
+                res.setHeader('X-Cache-Source', cached ? 'memory' : 'database');
+                return res.status(response.statusCode).json(response.responseBody);
             }
 
+            // COMPLETE → serve from cache or rebuild from DB
             if (existing.status === IdempotencyStatus.COMPLETED) {
+                const cached = this.store.getCachedResponse(idempotencyKey);
+                const response = cached ?? this.store.rebuildResponse(existing);
+
                 res.setHeader('X-Cache-Hit', 'true');
-                return res.status(existing.statusCode).json(existing.responseBody);
+                res.setHeader('X-Cache-Source', cached ? 'memory' : 'database');
+                return res.status(response.statusCode).json(response.responseBody);
             }
         }
-
 
         await this.store.setPending(idempotencyKey, incomingHash);
 

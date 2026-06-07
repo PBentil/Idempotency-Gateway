@@ -5,8 +5,16 @@ import { Repository } from "typeorm";
 import * as crypto from "crypto";
 import { IdempotencyStatus } from "./idempotency-status.enum";
 
+interface CachedResponse {
+    statusCode: number;
+    responseBody: Record<string, any>;
+}
+
 @Injectable()
 export class IdempotencyStore {
+
+    private responseCache = new Map<string, CachedResponse>();
+
     constructor(
         @InjectRepository(IdempotencyRecord)
         private readonly repo: Repository<IdempotencyRecord>,
@@ -19,6 +27,27 @@ export class IdempotencyStore {
             .digest('hex');
     }
 
+    getCachedResponse(key: string): CachedResponse | null {
+        return this.responseCache.get(key) ?? null;
+    }
+
+    rebuildResponse(record: IdempotencyRecord): CachedResponse {
+        const responseBody = {
+            message: `Charged ${record.amount} ${record.currency}`,
+            transactionId: record.transactionId,
+            amount: record.amount,
+            currency: record.currency,
+            processedAt: record.processedAt,
+        };
+
+        this.responseCache.set(record.idempotencyKey, {
+            statusCode: record.statusCode,
+            responseBody,
+        });
+
+        return { statusCode: record.statusCode, responseBody };
+    }
+
     async findByKey(key: string): Promise<IdempotencyRecord | null> {
         const record = await this.repo.findOne({
             where: { idempotencyKey: key },
@@ -28,6 +57,17 @@ export class IdempotencyStore {
 
         if (new Date() > new Date(record.expiresAt)) {
             await this.repo.delete(record.id);
+            this.responseCache.delete(key);
+            return null;
+        }
+
+        const thirtySecondsAgo = new Date(Date.now() - 30 * 1000);
+        if (
+            record.status === IdempotencyStatus.PENDING &&
+            record.createdAt < thirtySecondsAgo
+        ) {
+            await this.repo.delete(record.id);
+            this.responseCache.delete(key);
             return null;
         }
 
@@ -35,7 +75,9 @@ export class IdempotencyStore {
     }
 
     async setPending(key: string, bodyHash: string): Promise<void> {
-        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        const expiresAt = new Date(
+            Date.now() + 24 * 60 * 60 * 1000,
+        ).toISOString();
 
         const record = this.repo.create({
             idempotencyKey: key,
@@ -57,9 +99,14 @@ export class IdempotencyStore {
             {
                 status: IdempotencyStatus.COMPLETED,
                 statusCode,
-                responseBody,
+                transactionId: responseBody.transactionId,
+                amount: responseBody.amount,
+                currency: responseBody.currency,
+                processedAt: responseBody.processedAt,
             },
         );
+
+        this.responseCache.set(key, { statusCode, responseBody });
     }
 
     async waitForCompletion(
