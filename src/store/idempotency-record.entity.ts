@@ -21,8 +21,17 @@ export class IdempotencyRecord {
     @Column({ nullable: true })
     statusCode: number;
 
-    @Column({ type: 'simple-json', nullable: true })
-    responseBody: Record<string, any>;
+    @Column({ type: 'varchar', nullable: true })
+    transactionId: string;
+
+    @Column({ type: 'float',nullable: true })
+    amount: number;
+
+    @Column({type: "varchar", nullable: true })
+    currency: string;
+
+    @Column({ type: 'varchar', nullable: true })
+    processedAt: string;
 
     @CreateDateColumn()
     createdAt: Date;
