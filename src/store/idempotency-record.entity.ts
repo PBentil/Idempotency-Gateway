@@ -35,7 +35,4 @@ export class IdempotencyRecord {
 
     @CreateDateColumn()
     createdAt: Date;
-
-    @Column({ type: 'varchar' })
-    expiresAt: string;
 }
