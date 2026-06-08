@@ -8,12 +8,15 @@ import { IdempotencyStatus } from "./idempotency-status.enum";
 interface CachedResponse {
     statusCode: number;
     responseBody: Record<string, any>;
+    expiresAt: number;
 }
 
 @Injectable()
 export class IdempotencyStore {
 
     private responseCache = new Map<string, CachedResponse>();
+
+    private readonly CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
     constructor(
         @InjectRepository(IdempotencyRecord)
@@ -28,7 +31,15 @@ export class IdempotencyStore {
     }
 
     getCachedResponse(key: string): CachedResponse | null {
-        return this.responseCache.get(key) ?? null;
+        const cached = this.responseCache.get(key);
+        if (!cached) return null;
+
+        if (Date.now() > cached.expiresAt) {
+            this.responseCache.delete(key);
+            return null;
+        }
+
+        return cached;
     }
 
     rebuildResponse(record: IdempotencyRecord): CachedResponse {
@@ -40,12 +51,15 @@ export class IdempotencyStore {
             processedAt: record.processedAt,
         };
 
-        this.responseCache.set(record.idempotencyKey, {
+        const cached: CachedResponse = {
             statusCode: record.statusCode,
             responseBody,
-        });
+            expiresAt: Date.now() + this.CACHE_TTL_MS,
+        };
 
-        return { statusCode: record.statusCode, responseBody };
+        this.responseCache.set(record.idempotencyKey, cached);
+
+        return cached;
     }
 
     async findByKey(key: string): Promise<IdempotencyRecord | null> {
@@ -54,12 +68,6 @@ export class IdempotencyStore {
         });
 
         if (!record) return null;
-
-        if (new Date() > new Date(record.expiresAt)) {
-            await this.repo.delete(record.id);
-            this.responseCache.delete(key);
-            return null;
-        }
 
         const thirtySecondsAgo = new Date(Date.now() - 30 * 1000);
         if (
@@ -75,15 +83,10 @@ export class IdempotencyStore {
     }
 
     async setPending(key: string, bodyHash: string): Promise<void> {
-        const expiresAt = new Date(
-            Date.now() + 24 * 60 * 60 * 1000,
-        ).toISOString();
-
         const record = this.repo.create({
             idempotencyKey: key,
             bodyHash,
             status: IdempotencyStatus.PENDING,
-            expiresAt,
         });
 
         await this.repo.save(record);
@@ -106,7 +109,11 @@ export class IdempotencyStore {
             },
         );
 
-        this.responseCache.set(key, { statusCode, responseBody });
+        this.responseCache.set(key, {
+            statusCode,
+            responseBody,
+            expiresAt: Date.now() + this.CACHE_TTL_MS,
+        });
     }
 
     async waitForCompletion(
