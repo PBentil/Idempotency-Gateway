@@ -28,7 +28,6 @@ export class IdempotencyMiddleware implements NestMiddleware {
 
         if (existing) {
 
-            // Different body → reject
             if (existing.bodyHash !== incomingHash) {
                 throw new HttpException(
                     {
@@ -39,7 +38,6 @@ export class IdempotencyMiddleware implements NestMiddleware {
                 );
             }
 
-            // PENDING → wait for original to finish
             if (existing.status === IdempotencyStatus.PENDING) {
                 const completed = await this.store.waitForCompletion(idempotencyKey);
 
@@ -61,7 +59,6 @@ export class IdempotencyMiddleware implements NestMiddleware {
                 return res.status(response.statusCode).json(response.responseBody);
             }
 
-            // COMPLETE → serve from cache or rebuild from DB
             if (existing.status === IdempotencyStatus.COMPLETED) {
                 const cached = this.store.getCachedResponse(idempotencyKey);
                 const response = cached ?? this.store.rebuildResponse(existing);
